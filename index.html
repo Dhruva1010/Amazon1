@@ -988,11 +988,30 @@
   var cloudDb = null;
   var cloudPushTimer = null;
 
+  // Paste your firebaseConfig object here once (the same one you pasted into Settings)
+  // and every device that opens this link will connect to the cloud automatically —
+  // no more pasting it in on each new phone/laptop. Leave as null to keep the
+  // manual per-device Connect flow in Settings.
+  var DEFAULT_FIREBASE_CONFIG = {
+    apiKey: "AIzaSyD6yDyd_ElXQ2nlWHMXF6TOgzg0EQh-_SU",
+    authDomain: "pay-c17ca.firebaseapp.com",
+    projectId: "pay-c17ca",
+    storageBucket: "pay-c17ca.firebasestorage.app",
+    messagingSenderId: "546775321943",
+    appId: "1:546775321943:web:06535515ef07bbd5c64212",
+    measurementId: "G-MTMZF2NCY0"
+  };
+
   function loadFirebaseConfig(){
     try{
       var raw = localStorage.getItem('khata:firebaseConfig');
-      return raw ? JSON.parse(raw) : null;
-    }catch(e){ return null; }
+      if(raw) return JSON.parse(raw);
+    }catch(e){}
+    if(DEFAULT_FIREBASE_CONFIG){
+      try{ localStorage.setItem('khata:firebaseConfig', JSON.stringify(DEFAULT_FIREBASE_CONFIG)); }catch(e){}
+      return DEFAULT_FIREBASE_CONFIG;
+    }
+    return null;
   }
 
   function parseFirebaseConfigText(text){
