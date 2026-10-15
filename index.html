@@ -549,6 +549,7 @@
       amount:'',
       costPct:'',
       customerPct:'',
+      preDiscountPct:'',
       customerName:'',
       date: todayISO(),
       note:''
@@ -571,12 +572,16 @@
     return '₹' + n.toLocaleString('en-IN', opts);
   }
 
-  function calc(amount, costPct, custPct){
+  // prePct is the discount a gift card already carries on its own. The customer gets
+  // that PLUS your own customer %, so it comes straight out of your margin:
+  //   profit = face value x (my cost % - pre-discount % - customer %)
+  function calc(amount, costPct, custPct, prePct){
     amount = parseFloat(amount)||0;
     costPct = parseFloat(costPct)||0;
     custPct = parseFloat(custPct)||0;
+    prePct = parseFloat(prePct)||0;
     var cost = amount * (1 - costPct/100);
-    var customerPaid = amount * (1 - custPct/100);
+    var customerPaid = amount * (1 - (custPct + prePct)/100);
     var profit = customerPaid - cost;
     return {cost:cost, customerPaid:customerPaid, profit:profit};
   }
@@ -1264,6 +1269,10 @@
       catField+
       '<div class="field amount"><label>'+amtLabel+' (₹)</label>'+
         '<input type="number" inputmode="decimal" id="f-amount" placeholder="10000" value="'+esc(d.amount)+'"></div>'+
+      (isBill ? '' :
+        '<div class="field"><label>Gift card pre-discount (%)</label>'+
+          '<input type="number" inputmode="decimal" id="f-pre" placeholder="0" value="'+esc(d.preDiscountPct)+'">'+
+          '<p class="helper">The discount this card already carries (e.g. 5 for a card sold 5% off). It is added to the customer\'s discount, so it comes out of your profit. Remembered per brand.</p></div>')+
       '<div class="field"><label>'+costLabel+'</label>'+
         chipRow('cost', state.settings.costPresets, d.costPct)+
       '</div>'+
@@ -1316,7 +1325,25 @@
     var catEl = document.getElementById('f-category');
     if(catEl) catEl.addEventListener('change', function(){ state.entryDraft.category = catEl.value; });
     var brandEl = document.getElementById('f-brand');
-    if(brandEl) brandEl.addEventListener('input', function(){ state.entryDraft.brand = brandEl.value; });
+    var preEl = document.getElementById('f-pre');
+    function applyRememberedPre(){
+      if(!preEl) return;
+      var map = state.settings.brandPreDiscounts || {};
+      var key = (state.entryDraft.brand||'').trim().toLowerCase();
+      if(key && state.entryDraft.preDiscountPct==='' && map[key]!==undefined){
+        state.entryDraft.preDiscountPct = String(map[key]);
+        preEl.value = state.entryDraft.preDiscountPct;
+        updatePreview();
+      }
+    }
+    if(brandEl){
+      brandEl.addEventListener('input', function(){ state.entryDraft.brand = brandEl.value; applyRememberedPre(); });
+      brandEl.addEventListener('change', function(){ state.entryDraft.brand = brandEl.value; applyRememberedPre(); });
+    }
+    if(preEl) preEl.addEventListener('input', function(e){
+      state.entryDraft.preDiscountPct = e.target.value;
+      updatePreview();
+    });
 
     document.getElementById('f-amount').addEventListener('input', function(e){
       state.entryDraft.amount = e.target.value;
@@ -1361,12 +1388,17 @@
 
   function updatePreview(){
     var d = state.entryDraft;
-    var r = calc(d.amount, d.costPct, d.customerPct);
+    var isGift = d.txType==='gift';
+    var pre = isGift ? (parseFloat(d.preDiscountPct)||0) : 0;
+    var r = calc(d.amount, d.costPct, d.customerPct, pre);
     var label = d.txType==='bill' ? 'Bill amount' : 'Face value';
+    var custLine = (isGift && pre>0)
+      ? 'Customer pays ('+pre+'% pre + '+(d.customerPct||0)+'% = '+(pre+(parseFloat(d.customerPct)||0))+'% off)'
+      : 'Customer pays ('+(d.customerPct||0)+'% off)';
     document.getElementById('breakdown').innerHTML =
       '<div class="brow"><span>'+label+'</span><span class="val">'+fmtINR(parseFloat(d.amount)||0)+'</span></div>'+
       '<div class="brow cost"><span>My cost ('+(d.costPct||0)+'% off)</span><span class="val">− '+fmtINR(r.cost)+'</span></div>'+
-      '<div class="brow"><span>Customer pays ('+(d.customerPct||0)+'% off)</span><span class="val">'+fmtINR(r.customerPaid)+'</span></div>'+
+      '<div class="brow"><span>'+custLine+'</span><span class="val">'+fmtINR(r.customerPaid)+'</span></div>'+
       '<div class="brow profit divider"><span>Profit</span><span class="val">'+fmtINR(r.profit)+'</span></div>';
   }
 
@@ -1375,13 +1407,15 @@
     var amount = parseFloat(d.amount);
     var costPct = parseFloat(d.costPct);
     var custPct = parseFloat(d.customerPct);
+    var prePct = d.txType==='gift' ? (parseFloat(d.preDiscountPct)||0) : 0;
     if(!amount || amount<=0){ showToast('Enter a valid amount'); return; }
     if(isNaN(costPct)){ showToast('Choose or enter your cost %'); return; }
     if(isNaN(custPct)){ showToast('Choose or enter customer %'); return; }
+    if(prePct<0 || prePct+custPct>=100){ showToast('Pre-discount looks too high'); return; }
     if(d.txType==='bill' && !d.category) d.category = state.settings.billCategories[0];
     if(d.txType==='gift' && !d.brand){ showToast('Enter the gift card brand'); return; }
 
-    var r = calc(amount, costPct, custPct);
+    var r = calc(amount, costPct, custPct, prePct);
     var record = {
       id: state.editingId || uid(),
       txType: d.txType,
@@ -1390,6 +1424,7 @@
       amount: amount,
       costPct: costPct,
       customerPct: custPct,
+      preDiscountPct: prePct,
       cost: r.cost,
       customerPaid: r.customerPaid,
       profit: r.profit,
@@ -1410,10 +1445,20 @@
     }
     await saveTransactions();
 
+    var settingsDirty = false;
     if(!state.settings.giftBrands.includes(record.brand) && record.brand && record.brand!=='Other'){
       state.settings.giftBrands.splice(state.settings.giftBrands.length-1, 0, record.brand);
-      await saveSettings();
+      settingsDirty = true;
     }
+    if(record.txType==='gift' && record.brand){
+      if(!state.settings.brandPreDiscounts) state.settings.brandPreDiscounts = {};
+      var bKey = record.brand.trim().toLowerCase();
+      if(state.settings.brandPreDiscounts[bKey]!==record.preDiscountPct){
+        state.settings.brandPreDiscounts[bKey] = record.preDiscountPct;
+        settingsDirty = true;
+      }
+    }
+    if(settingsDirty) await saveSettings();
 
     state.entryDraft = blankDraft();
     renderAll();
@@ -1483,7 +1528,7 @@
       list.forEach(function(t){
         if(t.date!==lastDate){ html += '<div class="datehead">'+fmtDate(t.date)+'</div>'; lastDate=t.date; }
         var title = t.txType==='bill' ? t.category : t.brand;
-        var rateLabel = t.directProfit ? 'profit logged directly' : (t.costPct+'%/'+t.customerPct+'%');
+        var rateLabel = t.directProfit ? 'profit logged directly' : (t.costPct+'%/'+t.customerPct+'%'+(t.preDiscountPct>0 ? ' + '+t.preDiscountPct+'% pre' : ''));
         var meta = (t.customerName? esc(t.customerName)+' · ' : '') + rateLabel + (t.note? ' · '+esc(t.note):'');
         html += '<div class="txrow" data-id="'+t.id+'">'+
           '<div class="txleft">'+
@@ -1520,6 +1565,7 @@
       state.entryDraft = {
         id:t.id, txType:t.txType, category:t.category, brand:t.brand,
         amount:String(t.amount), costPct:String(t.costPct), customerPct:String(t.customerPct),
+        preDiscountPct: t.preDiscountPct>0 ? String(t.preDiscountPct) : '',
         customerName:t.customerName||'', date:t.date, note:t.note||''
       };
       state.view = 'entry';
@@ -1551,9 +1597,9 @@
 
   function exportCsv(list){
     if(list.length===0){ showToast('Nothing to export'); return; }
-    var header = ['Date','Type','Category/Brand','Customer','Amount','My %','Customer %','My Cost','Customer Paid','Profit','Note'];
+    var header = ['Date','Type','Category/Brand','Customer','Amount','My %','Customer %','Pre-discount %','My Cost','Customer Paid','Profit','Note'];
     var rows = list.map(function(t){
-      return [t.date, t.txType, (t.txType==='bill'?t.category:t.brand), t.customerName||'', t.amount, t.costPct, t.customerPct, t.cost.toFixed(2), t.customerPaid.toFixed(2), t.profit.toFixed(2), (t.note||'').replace(/,/g,';')].join(',');
+      return [t.date, t.txType, (t.txType==='bill'?t.category:t.brand), t.customerName||'', t.amount, t.costPct, t.customerPct, t.preDiscountPct||0, t.cost.toFixed(2), t.customerPaid.toFixed(2), t.profit.toFixed(2), (t.note||'').replace(/,/g,';')].join(',');
     });
     var csv = header.join(',')+'\\n'+rows.join('\\n');
     var blob = new Blob([csv], {type:'text/csv'});
