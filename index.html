@@ -572,18 +572,20 @@
     return '₹' + n.toLocaleString('en-IN', opts);
   }
 
-  // prePct is the discount a gift card already carries on its own. The customer gets
-  // that PLUS your own customer %, so it comes straight out of your margin:
-  //   profit = face value x (my cost % - pre-discount % - customer %)
+  // prePct is the discount a gift card already carries on its own. It is taken off the
+  // face value first. Then BOTH your own cost % and the customer % come off that reduced price:
+  //   e.g. 7500 -9% = 6825
+  //        customer pays 6825 -8% = 6279, you pay 6825 -20% = 5460, profit 819
   function calc(amount, costPct, custPct, prePct){
     amount = parseFloat(amount)||0;
     costPct = parseFloat(costPct)||0;
     custPct = parseFloat(custPct)||0;
     prePct = parseFloat(prePct)||0;
-    var cost = amount * (1 - costPct/100);
-    var customerPaid = amount * (1 - (custPct + prePct)/100);
+    var afterPre = amount * (1 - prePct/100);
+    var cost = afterPre * (1 - costPct/100);
+    var customerPaid = afterPre * (1 - custPct/100);
     var profit = customerPaid - cost;
-    return {cost:cost, customerPaid:customerPaid, profit:profit};
+    return {cost:cost, afterPre:afterPre, customerPaid:customerPaid, profit:profit};
   }
 
   function uid(){
@@ -1272,7 +1274,7 @@
       (isBill ? '' :
         '<div class="field"><label>Gift card pre-discount (%)</label>'+
           '<input type="number" inputmode="decimal" id="f-pre" placeholder="0" value="'+esc(d.preDiscountPct)+'">'+
-          '<p class="helper">The discount this card already carries (e.g. 5 for a card sold 5% off). It is added to the customer\'s discount, so it comes out of your profit. Remembered per brand.</p></div>')+
+          '<p class="helper">The discount this card already carries (e.g. 5 for a card sold 5% off). It is taken off the face value first, then both your cost % and the customer % come off that reduced price. Remembered per brand.</p></div>')+
       '<div class="field"><label>'+costLabel+'</label>'+
         chipRow('cost', state.settings.costPresets, d.costPct)+
       '</div>'+
@@ -1392,12 +1394,15 @@
     var pre = isGift ? (parseFloat(d.preDiscountPct)||0) : 0;
     var r = calc(d.amount, d.costPct, d.customerPct, pre);
     var label = d.txType==='bill' ? 'Bill amount' : 'Face value';
-    var custLine = (isGift && pre>0)
-      ? 'Customer pays ('+pre+'% pre + '+(d.customerPct||0)+'% = '+(pre+(parseFloat(d.customerPct)||0))+'% off)'
-      : 'Customer pays ('+(d.customerPct||0)+'% off)';
+    var onReduced = (isGift && pre>0) ? ' on reduced price' : '';
+    var custLine = 'Customer pays ('+(d.customerPct||0)+'% off'+onReduced+')';
+    var preLine = (isGift && pre>0)
+      ? '<div class="brow"><span>After card pre-discount ('+pre+'% off)</span><span class="val">'+fmtINR(r.afterPre)+'</span></div>'
+      : '';
     document.getElementById('breakdown').innerHTML =
       '<div class="brow"><span>'+label+'</span><span class="val">'+fmtINR(parseFloat(d.amount)||0)+'</span></div>'+
-      '<div class="brow cost"><span>My cost ('+(d.costPct||0)+'% off)</span><span class="val">− '+fmtINR(r.cost)+'</span></div>'+
+      preLine+
+      '<div class="brow cost"><span>My cost ('+(d.costPct||0)+'% off'+onReduced+')</span><span class="val">− '+fmtINR(r.cost)+'</span></div>'+
       '<div class="brow"><span>'+custLine+'</span><span class="val">'+fmtINR(r.customerPaid)+'</span></div>'+
       '<div class="brow profit divider"><span>Profit</span><span class="val">'+fmtINR(r.profit)+'</span></div>';
   }
